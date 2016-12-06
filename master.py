@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import lsr_gradient as lsr
 import lasso
 import logistic
-import working_logistic
 from sklearn import datasets
+from collections import defaultdict
 import seaborn as sns
 
 def gd(A, x0, b, rate, iters, x_star, pkg):
@@ -31,8 +31,9 @@ def momentum(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     return errors
 
 
-def sgd_mini_batch(A, x0, b, iters, rate, batch_size, x_star, pkg, tuning=False, target=.1, **kwargs):
+def sgd_mini_batch(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     x = x0.copy()
+    rate = params['rate']
     errors = []
     for i in range(iters):
         x -= rate * pkg.mini_batch_gradient(A, x, b, batch_size, **kwargs)
@@ -48,10 +49,12 @@ def sgd(A, x0, b, rate, iters, x_star, pkg):
     return errors
 
 
-def nesterov(A, x0, b, iters, gamma, rate, batch_size, x_star, pkg, **kwargs):
+def nesterov(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     x = x0.copy()
     v = 0.
     errors = []
+    rate = params['rate']
+    gamma = params['gamma']
     for i in range(iters):
         v = gamma * v + rate * pkg.mini_batch_gradient(A, x-gamma*v, b, batch_size, **kwargs)
         x -= v
@@ -59,10 +62,12 @@ def nesterov(A, x0, b, iters, gamma, rate, batch_size, x_star, pkg, **kwargs):
     return errors
 
 
-def adagrad(A, x0, b, iters, epsilon, rate, batch_size, x_star, pkg, **kwargs):
+def adagrad(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     x = x0.copy()
     G = [0. for i in range(len(x0))]
     errors = []
+    rate = params['rate']
+    epsilon = params['epsilon']
     for i in range(iters):
         grad = pkg.mini_batch_gradient(A, x, b, batch_size, **kwargs)
         G += grad ** 2
@@ -72,13 +77,15 @@ def adagrad(A, x0, b, iters, epsilon, rate, batch_size, x_star, pkg, **kwargs):
     return errors
 
 
-def adadelta(A, x0, b, iters, gamma, epsilon, batch_size, x_star, pkg, **kwargs):
+def adadelta(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     #Note that adadelta is very slow at the beginning and better for large, complex networks
     #There is no learning rate parameter, interestingly
     x = x0.copy()
     Eg2 = np.zeros(len(x0))
     errors = []
     Edt2 = np.zeros(len(x0))
+    gamma = params['gamma']
+    epsilon = params['epsilon']
     for i in range(iters):
         RMSdt_prev = np.sqrt(Edt2 + epsilon)
         grad = pkg.mini_batch_gradient(A, x, b, batch_size, **kwargs)
@@ -91,10 +98,13 @@ def adadelta(A, x0, b, iters, gamma, epsilon, batch_size, x_star, pkg, **kwargs)
     return errors
 
 
-def RMSprop(A, x0, b, rate, gamma, epsilon, batch_size, iters, x_star, pkg, **kwargs):
+def RMSprop(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     x = x0.copy()
     Eg2 = np.zeros(len(x0))
     errors = []
+    rate = params['rate']
+    gamma = params['gamma']
+    epsilon = params['epsilon']
     for i in range(iters):
         grad = pkg.mini_batch_gradient(A, x, b, batch_size, **kwargs)
         Eg2 = gamma * Eg2 + (1. - gamma) * grad ** 2
@@ -104,11 +114,15 @@ def RMSprop(A, x0, b, rate, gamma, epsilon, batch_size, iters, x_star, pkg, **kw
     return errors
 
 
-def adam(A, x0, b, rate, epsilon, B1, B2, batch_size, iters, x_star, pkg, **kwargs):
+def adam(A, x0, b, x_star, batch_size, iters, params, pkg, **kwargs):
     x = x0.copy()
     m = np.zeros(len(x0))
     v = np.zeros(len(x0))
     errors = []
+    rate = params['rate']
+    epsilon = params['epsilon']
+    B1 = params['B1']
+    B2 = params['B2']
     for i in range(iters):
         grad = pkg.mini_batch_gradient(A, x, b, batch_size, **kwargs)
         m = B1 * m + (1. - B1) * grad
@@ -173,6 +187,24 @@ def hypertune_adam(A, x0, b, iters, batch_size, x_star, pkg, rate_range, B1_rang
     best = np.argmin(values)
     return rates[best], B1s[best], B2s[best]
 
+def random_search_tuning(A, x0, b, x_star, batch_size, iters, param2range, trials, pkg, fn, fixed2value={}, **kwargs):
+    values = []
+    params = defaultdict(list)
+    for _ in range(trials):
+        param_list = {fixed: fixed2value[fixed] for fixed in fixed2value}
+        for param in param2range:
+            params[param].append(random.uniform(param2range[param][0], param2range[param][1]))
+            param_list[param] = params[param][-1]
+        values.append(fn(A, x0, b, x_star, batch_size, iters, param_list, pkg, **kwargs)[-1])
+    best = np.argmin(values)
+    best_params = {param: params[param][best] for param in param2range}
+    for fixed in fixed2value:
+        best_params[fixed] = fixed2value[fixed]
+    return best_params
+
+
+
+
 def hypertune_lsr():
     n = 2000
     d = 200
@@ -184,63 +216,43 @@ def hypertune_lsr():
     x0 = x0 / np.linalg.norm(x0)
 
     batch_size = 32 
+    epsilon = 1e-8
     iters = 40
     trials = 100
 
     rate_range = (.0001, .15)
-    sgd_rate = hypertune_sgd(A, x0, b, iters, batch_size, x_star, lsr, rate_range, trials)
+    sgd_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range}, trials, lsr, sgd_mini_batch)
 
     rate_range = (.0001, .05)
     gamma_range = (.1, .9999999)
-    momentum_gamma, momentum_rate = hypertune_two_param(A, x0, b, iters, batch_size, x_star, lsr, gamma_range, rate_range, trials, momentum)
-    print momentum_gamma
-    print momentum_rate
-    print "\n\n\n\n\n"
+    momentum_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range, 'gamma': gamma_range}, trials, lsr, momentum)
 
     rate_range = (.0001, .08)
     gamma_range = (.1, .9999999)
-    nesterov_gamma, nesterov_rate = hypertune_two_param(A, x0, b, iters, batch_size, x_star, lsr, gamma_range, rate_range, trials, nesterov)
-    print nesterov_gamma
-    print nesterov_rate, '\n\n\n\n\n'
-
+    nesterov_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range, 'gamma': gamma_range}, trials, lsr, nesterov)
 
     rate_range = (.00001, .15)
-    epsilon_range = (1e-8, 1e-8)
-    adagrad_epsilon, adagrad_rate = hypertune_two_param(A, x0, b, iters, batch_size, x_star, lsr, epsilon_range, rate_range, trials, adagrad)
-    print adagrad_epsilon
-    print adagrad_rate, '\n\n\n'
+    adagrad_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range}, trials, lsr, adagrad, {'epsilon': epsilon})
 
-    
-
-    adadelta_gamma, adadelta_epsilon = hypertune_two_param(A, x0, b, iters, batch_size, x_star, lsr, gamma_range, epsilon_range, trials, adadelta)
-    print adadelta_gamma
-    print adadelta_epsilon, '\n\n\n\n'
+    adadelta_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'gamma': gamma_range}, trials, lsr, adadelta, {'epsilon': epsilon})
 
     rate_range = (.00001, .15)
     gamma_range = (.8, .99999)
-    rmsprop_rate, rmsprop_gamma = hypertune_rmsprop(A, x0, b, iters, batch_size, x_star, lsr, rate_range, gamma_range, trials)
-    print rmsprop_rate
-    print rmsprop_gamma, '\n\n\n'
+    rmsprop_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range, 'gamma': gamma_range}, trials, lsr, RMSprop, {'epsilon': epsilon})
 
     rate_range = (.00001, .15)
     B1_range = (.8, .99999)
     B2_range = (.9, .99999)
-    adam_rate, adam_B1, adam_B2 = hypertune_adam(A, x0, b, iters, batch_size, x_star, lsr, rate_range, B1_range, B2_range, trials)
-    print adam_rate
-    print adam_B1
-    print adam_B2, '\n\n\n'
-
-    epsilon = 1e-8
+    adam_params = random_search_tuning(A, x0, b, x_star, batch_size, iters, {'rate': rate_range, 'B1': B1_range, 'B2': B2_range}, trials, lsr, adam, {'epsilon': epsilon})
 
     iters = 100
-    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, iters, sgd_rate, batch_size, x_star, lsr)
-    momentum_values = momentum(A, x0, b, iters, momentum_gamma, momentum_rate, batch_size, x_star, lsr)
-    nesterov_values = nesterov(A, x0, b, iters, nesterov_gamma, nesterov_rate, batch_size, x_star, lsr)
-    adagrad_values = adagrad(A, x0, b, iters, adagrad_epsilon, adagrad_rate, batch_size, x_star, lsr)
-    adadelta_values = adadelta(A, x0, b, iters, adadelta_gamma, adadelta_epsilon, batch_size, x_star, lsr)
-    rmsprop_values = RMSprop(A, x0, b, rmsprop_rate, rmsprop_gamma, epsilon, batch_size, iters, x_star, lsr)
-    adam_values = adam(A, x0, b, adam_rate, epsilon, adam_B1, adam_B2, batch_size, iters, x_star, lsr)
-
+    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, x_star, batch_size, iters, sgd_params, lsr)
+    momentum_values = momentum(A, x0, b, x_star, batch_size, iters, momentum_params, lsr)
+    nesterov_values = nesterov(A, x0, b, x_star, batch_size, iters, nesterov_params, lsr)
+    adagrad_values = adagrad(A, x0, b, x_star, batch_size, iters, adagrad_params, lsr)
+    adadelta_values = adadelta(A, x0, b, x_star, batch_size, iters, adadelta_params, lsr)
+    rmsprop_values = RMSprop(A, x0, b, x_star, batch_size, iters, rmsprop_params, lsr)
+    adam_values = adam(A, x0, b, x_star, batch_size, iters, adam_params, lsr)
     sgd_mini_batch_line, = plt.plot(sgd_mini_batch_values, 'g-', label='sgd mini batch error')
     momentum_line, = plt.plot(momentum_values, 'b-', label='momentum error')
     nesterov_line, = plt.plot(nesterov_values, 'c-', label='nesterov error')
@@ -273,13 +285,13 @@ def plot_lsr():
     B1 = .9
     B2 = .999
 
-    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, iters, sgd_t, batch_size, x_star, lsr)
+    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t}, lsr)
     momentum_values = momentum(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, lsr)
-    nesterov_values = nesterov(A, x0, b, iters, gamma, sgd_t, batch_size, x_star, lsr)
-    adagrad_values = adagrad(A, x0, b, iters, epsilon, .1, batch_size, x_star, lsr)
-    adadelta_values = adadelta(A, x0, b, iters, gamma, epsilon, batch_size, x_star, lsr)
-    rmsprop_values = RMSprop(A, x0, b, sgd_t, gamma, epsilon, batch_size, iters, x_star, lsr)
-    adam_values = adam(A, x0, b, sgd_t, epsilon, B1, B2, batch_size, iters, x_star, lsr)
+    nesterov_values = nesterov(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, lsr)
+    adagrad_values = adagrad(A, x0, b, x_star, batch_size, iters, {'rate': .1, 'epsilon': epsilon}, lsr)
+    adadelta_values = adadelta(A, x0, b, x_star, batch_size, iters, {'epsilon': epsilon, 'gamma': gamma}, lsr)
+    rmsprop_values = RMSprop(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'epsilon': epsilon, 'gamma': gamma}, lsr)
+    adam_values = adam(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'epsilon': epsilon, 'B1': B1, 'B2': B2}, lsr)
     sgd_mini_batch_line, = plt.plot(sgd_mini_batch_values, 'g-', label='sgd mini batch error')
     momentum_line, = plt.plot(momentum_values, 'b-', label='momentum error')
     nesterov_line, = plt.plot(nesterov_values, 'y-', label='nesterov error')
@@ -312,13 +324,13 @@ def plot_lasso():
 
     l = 1.5
 
-    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, iters, sgd_t, batch_size, x_star, lasso, l=l)
-    momentum_values = momentum(A, x0, b, iters, gamma, sgd_t, batch_size, x_star, lasso, l=l)
-    nesterov_values = nesterov(A, x0, b, iters, gamma, sgd_t, batch_size, x_star, lasso, l=l)
-    adagrad_values = adagrad(A, x0, b, iters, epsilon, .1, batch_size, x_star, lasso, l=l)
-    adadelta_values = adadelta(A, x0, b, iters, gamma, epsilon, batch_size, x_star, lasso, l=l)
-    rmsprop_values = RMSprop(A, x0, b, sgd_t, gamma, epsilon, batch_size, iters, x_star, lasso, l=l)
-    adam_values = adam(A, x0, b, sgd_t, epsilon, B1, B2, batch_size, iters, x_star, lasso, l=l)
+    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t}, lasso, l=l)
+    momentum_values = momentum(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, lasso, l=l)
+    nesterov_values = nesterov(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, lasso, l=l)
+    adagrad_values = adagrad(A, x0, b, x_star, batch_size, iters, {'rate': .1, 'epsilon': epsilon}, lasso, l=l)
+    adadelta_values = adadelta(A, x0, b, x_star, batch_size, iters, {'gamma': gamma, 'epsilon': epsilon}, lasso, l=l)
+    rmsprop_values = RMSprop(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma, 'epsilon': epsilon}, lasso, l=l)
+    adam_values = adam(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'epsilon': epsilon, 'B1': B1, 'B2': B2}, lasso, l=l)
     sgd_mini_batch_line, = plt.plot(sgd_mini_batch_values, 'g-', label='sgd mini batch error')
     momentum_line, = plt.plot(momentum_values, 'b-', label='momentum error')
     nesterov_line, = plt.plot(nesterov_values, 'y-', label='nesterov error')
@@ -350,13 +362,13 @@ def plot_logistic():
     epsilon = 1e-8
     B1 = .9
     B2 = .999
-    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, iters, sgd_t, batch_size, x_star, logistic)
-    momentum_values = momentum(A, x0, b, iters, gamma, sgd_t, batch_size, x_star, logistic)
-    nesterov_values = nesterov(A, x0, b, iters, gamma, sgd_t, batch_size, x_star, logistic)
-    adagrad_values = adagrad(A, x0, b, iters, epsilon, .1, batch_size, x_star, logistic)
-    adadelta_values = adadelta(A, x0, b, iters, gamma, epsilon, batch_size, x_star, logistic)
-    rmsprop_values = RMSprop(A, x0, b, sgd_t, gamma, epsilon, batch_size, iters, x_star, logistic)
-    adam_values = adam(A, x0, b, sgd_t, epsilon, B1, B2, batch_size, iters, x_star, logistic)
+    sgd_mini_batch_values = sgd_mini_batch(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t}, logistic)
+    momentum_values = momentum(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, logistic)
+    nesterov_values = nesterov(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma}, logistic)
+    adagrad_values = adagrad(A, x0, b, x_star, batch_size, iters, {'rate': .1, 'epsilon': epsilon}, logistic)
+    adadelta_values = adadelta(A, x0, b, x_star, batch_size, iters, {'gamma': gamma, 'epsilon': epsilon}, logistic)
+    rmsprop_values = RMSprop(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'gamma': gamma, 'epsilon': epsilon}, logistic)
+    adam_values = adam(A, x0, b, x_star, batch_size, iters, {'rate': sgd_t, 'epsilon': epsilon, 'B1': B1, 'B2': B2}, logistic)
     sgd_mini_batch_line, = plt.plot(sgd_mini_batch_values, 'g-', label='sgd mini batch error')
     momentum_line, = plt.plot(momentum_values, 'b-', label='momentum error')
     nesterov_line, = plt.plot(nesterov_values, 'y-', label='nesterov error')
@@ -375,11 +387,11 @@ def plot_logistic():
     plt.show()
 
 def main():
-    plot_lsr()
-    exit(1)
     hypertune_lsr()
-    plot_logistic()
+    exit(1)
     plot_lasso()
+    plot_lsr()
+    plot_logistic()
 
 
 if __name__ == '__main__':

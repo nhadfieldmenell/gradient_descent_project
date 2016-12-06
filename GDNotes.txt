@@ -1,0 +1,23 @@
+SGD
+	Strategies to speed it up (http://ufldl.stanford.edu/tutorial/supervised/OptimizationStochasticGradientDescent/)
+		1. Halve the learning rate with each pass through the data
+		2. Hold out separate set
+			Evaluate on that set after each epoch
+			Once change on that set is below a threshold, alter the rate
+		3. rate at iteration t: a/(b+t)
+		
+	Mini batch results in less variance, less pronounced oscillation
+		
+
+Momentum (http://ufldl.stanford.edu/tutorial/supervised/OptimizationStochasticGradientDescent/)
+	Helps in the case of a long shallow ravine with steep walls
+		SGD will do most of its oscillation up and down the walls as the gradient is strongest in that direction
+		Objectives of deep architectures have this near local minima, making SGD slow
+	
+	Equation
+		v = gv + a*gradJ(theta;x,y)
+		theta = theta - v
+		
+		
+Adagrad http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf
+	p2146: the ADAGRAD family of algorithms naturally incorporates regularization and gives very sparse solutions with similar performance to dense solutions
